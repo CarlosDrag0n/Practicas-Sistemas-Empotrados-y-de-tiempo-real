@@ -12,7 +12,7 @@ const int PIN_LCD_D7 = 3;
 const int PIN_LED_1 = 4;
 const int PIN_LED_2 = 11; // PWM
 
-const int PIN_BOTON = 2;
+const int PIN_BOTON = 2; // DEBE SER PIN 2 O 3 PARA INTERRUPCIONES EN UNO/NANO
 
 const int PIN_DHT = A5;
 #define DHTTYPE DHT11
@@ -34,65 +34,57 @@ int distancia;
 String nombres[5] = {"Solo       ", "Cortado    ", "Doble      ", "Premium    ", "Chocolate  "};
 float precios[5] = {1.00, 1.10, 1.25, 1.50, 2.00};
 
-unsigned long tInicio = 0;      // Reloj principal para estados
-int brilloLed = 0;              // Variable para efecto LED
-unsigned long intervaloLed = 0; // Velocidad efecto LED
+unsigned long tInicio = 0;      
+int brilloLed = 0;              
+unsigned long intervaloLed = 0; 
 
 // Variables Anti-Flickering (Sensores)
 float tempPrev = -999; 
 float humPrev = -999;
-unsigned long tRefrescoSensores = 0; // Para actualizar LCD en modo admin sin parpadeo
+unsigned long tRefrescoSensores = 0; 
 
-// Variables Botón Principal
-unsigned long tBotonPress = 0; 
+// --- VARIABLES BOTÓN E INTERRUPCIÓN ---
+// "volatile" es obligatorio para variables usadas dentro de una interrupción
+volatile bool botonPresionado = false; 
+volatile unsigned long ultimoRebote = 0; 
+unsigned long tBotonPress = 0; // Para medir cuánto tiempo lleva pulsado
 
-// Variables Control Joystick (Anti-Rebote sin Delay)
-bool prevJoySelect = false; // Estado anterior del botón joy
-bool prevJoyBack = false;   // Estado anterior del eje X joy
+// Variables Control Joystick 
+bool prevJoySelect = false; 
+bool prevJoyBack = false;   
 
-// Control de repintado LCD (Para evitar flickering)
+// Control de repintado LCD 
 bool adminRedraw = true; 
 
 LiquidCrystal lcd(PIN_LCD_RS, PIN_LCD_E, PIN_LCD_D4, PIN_LCD_D5, PIN_LCD_D6, PIN_LCD_D7);
 DHT dht(PIN_DHT, DHTTYPE);
 
-// --- MÁQUINAS DE ESTADOS ---
-
-// Cliente
-enum Estado {
-  INICIO,          
-  ESPERANDO,
-  ENCONTRADO_MSG,    
-  ENCONTRADO_DATOS, 
-  MENU,
-  PREPARANDO,
-  RETIRAR,           
-  REINICIANDO,       
-  ADMIN              
-};
+// --- ESTADOS ---
+enum Estado { INICIO, ESPERANDO, ENCONTRADO_MSG, ENCONTRADO_DATOS, MENU, PREPARANDO, RETIRAR, REINICIANDO, ADMIN };
 Estado estadoActual = INICIO; 
 
-// Admin
-enum AdminEstado {
-  ADMIN_INICIO,     
-  ADMIN_MAIN,
-  ADMIN_TEMP,
-  ADMIN_DIST,
-  ADMIN_COUNT,
-  ADMIN_PRICE_LIST,
-  ADMIN_PRICE_EDIT,
-  ADMIN_SALIDA      
-};
+enum AdminEstado { ADMIN_INICIO, ADMIN_MAIN, ADMIN_TEMP, ADMIN_DIST, ADMIN_COUNT, ADMIN_PRICE_LIST, ADMIN_PRICE_EDIT, ADMIN_SALIDA };
 AdminEstado adminEstadoActual = ADMIN_MAIN;
 
 int adminCursor = 0; 
 int precioCursor = 0; 
 
+// --- RUTINA DE INTERRUPCIÓN (ISR) ---
+// Se ejecuta automáticamente cuando el Pin 2 cambia de estado
+void detectorBoton() {
+  if (millis() - ultimoRebote > 50) { // Anti-rebote de 50ms
+    if (digitalRead(PIN_BOTON) == LOW) {
+      botonPresionado = true;
+    } else {
+      botonPresionado = false;
+    }
+    ultimoRebote = millis();
+  }
+}
 
 void setup() {
   Serial.begin(9600);
   
-  // Configuración de pines
   pinMode(PIN_LED_1, OUTPUT);
   pinMode(PIN_LED_2, OUTPUT);
   pinMode(PIN_BOTON, INPUT_PULLUP);
@@ -100,29 +92,24 @@ void setup() {
   pinMode(PIN_ULTRA_TRIG, OUTPUT);
   pinMode(PIN_ULTRA_ECHO, INPUT);
   
-  // Iniciar Pantalla y Sensor
+  // ACTIVAR INTERRUPCIÓN: Dispara la función 'detectorBoton' cuando el estado CAMBIA
+  attachInterrupt(digitalPinToInterrupt(PIN_BOTON), detectorBoton, CHANGE);
+  
   lcd.begin(16, 2);
   dht.begin();
-  
   randomSeed(analogRead(A0)); 
 
-  lcd.setCursor(0, 0);
-  lcd.print("CARGANDO...");
+  lcd.setCursor(0, 0); lcd.print("CARGANDO...");
   
-  // Pequeña secuencia de inicio
   for (int i = 0; i < 3; i++) {
-    digitalWrite(PIN_LED_1, HIGH); 
-    delay(200);                     
-    digitalWrite(PIN_LED_1, LOW);  
-    delay(200);                     
+    digitalWrite(PIN_LED_1, HIGH); delay(200);                     
+    digitalWrite(PIN_LED_1, LOW);  delay(200);                     
   }
   
-  // Primer estado INICIO
   lcd.clear();
   tInicio = millis(); 
   estadoActual = INICIO; 
 }
-
 
 void loop() {
   if (estadoActual == ADMIN) {
@@ -133,13 +120,12 @@ void loop() {
 }
 
 // ---------------------------------------------------------
-// MODO SERVICIO (USANDO SWITCH)
+// MODO SERVICIO
 // ---------------------------------------------------------
 void handleServicioMode() {
 
-  // Lógica de Botón Global (Pulsación Larga -> Admin)
-  // Se mantiene fuera del switch porque aplica a casi cualquier momento
-  if (digitalRead(PIN_BOTON) == LOW) {
+  // Lógica de Botón Global usando la variable de la interrupción
+  if (botonPresionado) {
     if (tBotonPress == 0) tBotonPress = millis();
     
     // Si > 5 seg -> ADMIN
@@ -149,6 +135,7 @@ void handleServicioMode() {
       return; 
     }
   } else {
+    // Al soltar el botón
     if (tBotonPress > 0) {
       unsigned long duracionPulsacion = millis() - tBotonPress;
       // Reinicio (2s - 5s)
@@ -159,23 +146,18 @@ void handleServicioMode() {
     }
   }
 
-  // --- MÁQUINA DE ESTADOS PRINCIPAL ---
+  // --- SWITCH DE ESTADOS ---
   switch (estadoActual) {
-
     case INICIO:
-      lcd.setCursor(4, 0);
-      lcd.print("Servicio");
+      lcd.setCursor(4, 0); lcd.print("Servicio");
       if (millis() - tInicio > 1000) reiniciarServicio(); 
       break;
 
     case ESPERANDO:
       if (millis() - tInicio > 200) {
         medirDistancia();
-        
-        // Dibujar solo lo necesario
         lcd.setCursor(0, 0); lcd.print("ESPERANDO");
         lcd.setCursor(0, 1); lcd.print("CLIENTE...    "); 
-        
         tInicio = millis(); 
         if (distancia < 100) {
           estadoActual = ENCONTRADO_MSG; 
@@ -188,27 +170,21 @@ void handleServicioMode() {
     case ENCONTRADO_MSG:
       lcd.setCursor(4, 0); lcd.print("CLIENTE");
       lcd.setCursor(3, 1); lcd.print("ENCONTRADO");
-      
       if (millis() - tInicio > 2000) {
         estadoActual = ENCONTRADO_DATOS;
         lcd.clear();
-        tempPrev = -999; // Forzar actualización LCD
+        tempPrev = -999; 
         tInicio = millis(); 
       }
       break;
 
     case ENCONTRADO_DATOS: {
-      // Usamos llaves {} para definir variables locales dentro del case
       float h = dht.readHumidity();
       float t = dht.readTemperature();
-      
-      // Actualizar solo si cambia
       if (abs(t - tempPrev) > 0.5 || abs(h - humPrev) > 1.0) {
          mostrarDatosDHT(t, h);
-         tempPrev = t;
-         humPrev = h;
+         tempPrev = t; humPrev = h;
       }
-
       if (millis() - tInicio > 5000) {
         distancia = 1000;
         estadoActual = MENU;
@@ -220,15 +196,10 @@ void handleServicioMode() {
 
     case MENU: {
       int joyY = analogRead(PIN_JOY_Y);
-      
       if(joyY < 450 && count < 4 && !joystickMovido){
-        count++; 
-        joystickMovido = true;
-        lcd.clear(); 
+        count++; joystickMovido = true; lcd.clear(); 
       } else if(joyY > 650 && count > 0 && !joystickMovido){
-        count--; 
-        joystickMovido = true;
-        lcd.clear();
+        count--; joystickMovido = true; lcd.clear();
       } else if (joyY >= 450 && joyY <= 650) {
         joystickMovido = false;
       }
@@ -239,12 +210,10 @@ void handleServicioMode() {
       if (digitalRead(PIN_JOY_SW) == LOW) {
         delay(50); 
         while(digitalRead(PIN_JOY_SW) == LOW); 
-        
         estadoActual = PREPARANDO;
         lcd.clear();
         brilloLed = 0; 
-        long tiempoTotal = random(4000, 8001); 
-        intervaloLed = tiempoTotal / 255;       
+        intervaloLed = random(4000, 8001) / 255;       
         tInicio = millis(); 
       }
       break;
@@ -252,7 +221,6 @@ void handleServicioMode() {
 
     case PREPARANDO:
       lcd.setCursor(0, 0); lcd.print("Preparando Cafe...");
-      
       if (millis() - tInicio >= intervaloLed) {
         if (brilloLed <= 255) {
           analogWrite(PIN_LED_2, brilloLed);
@@ -276,25 +244,21 @@ void handleServicioMode() {
       lcd.setCursor(0, 0); lcd.print("REINICIANDO...");
       if (millis() - tInicio > 1500) reiniciarServicio();
       break;
-      
-    default:
-      // Estado seguro por si acaso
-      estadoActual = INICIO;
-      break;
+
+    default: estadoActual = INICIO; break;
   }
 }
 
 // ---------------------------------------------------------
-// MODO ADMIN (USANDO SWITCH)
+// MODO ADMIN
 // ---------------------------------------------------------
 void handleAdminMode() {
 
-  // --- 1. LECTURA DE CONTROLES NO BLOQUEANTE ---
-  // Se mantiene fuera del switch para que funcione en cualquier menú
-  
-  if (digitalRead(PIN_BOTON) == LOW) {
+  // Salida rápida: Si la variable de interrupción es true por 3 segundos
+  if (botonPresionado) {
       long t = 0;
-      while(digitalRead(PIN_BOTON) == LOW) {
+      // Mientras la variable siga siendo true (la interrupción la pondrá false al soltar)
+      while(botonPresionado) { 
         delay(10);
         t += 10;
         if (t >= 3000) { 
@@ -307,45 +271,33 @@ void handleAdminMode() {
   int joyY = analogRead(PIN_JOY_Y);
   bool currentJoySelect = (digitalRead(PIN_JOY_SW) == LOW);
   bool currentJoyBack = (analogRead(PIN_JOY_X) < 450); 
-
   bool joySelectClick = (currentJoySelect && !prevJoySelect);
   bool joyBackClick = (currentJoyBack && !prevJoyBack);
-
   prevJoySelect = currentJoySelect;
   prevJoyBack = currentJoyBack;
 
-  // --- 2. MÁQUINA DE ESTADOS ADMIN ---
-
+  // --- SWITCH DE ESTADOS ADMIN ---
   switch (adminEstadoActual) {
-
     case ADMIN_INICIO:
       if (adminRedraw) { lcd.clear(); lcd.setCursor(0,0); lcd.print("MODO ADMIN"); adminRedraw = false; }
-      if (millis() - tInicio > 1000) {
-        adminEstadoActual = ADMIN_MAIN;
-        adminRedraw = true;
-      }
+      if (millis() - tInicio > 1000) { adminEstadoActual = ADMIN_MAIN; adminRedraw = true; }
       break;
 
     case ADMIN_SALIDA:
       if (adminRedraw) {
          lcd.clear(); lcd.setCursor(0,0); lcd.print("SALIENDO...");
-         digitalWrite(PIN_LED_1, LOW); analogWrite(PIN_LED_2, 0);
-         adminRedraw = false;
+         digitalWrite(PIN_LED_1, LOW); analogWrite(PIN_LED_2, 0); adminRedraw = false;
       }
       if (millis() - tInicio > 1000) reiniciarServicio(); 
       break;
 
     case ADMIN_MAIN: {
-      // Necesario llaves {} porque declaramos variable local 'menu'
       String menu[4] = {"Ver temp", "Ver distancia", "Ver contador", "Modificar $"};
-      
       if (joyY < 450 && adminCursor < 3 && !joystickMovido) {
         adminCursor++; joystickMovido = true; adminRedraw = true;
       } else if (joyY > 650 && adminCursor > 0 && !joystickMovido) {
         adminCursor--; joystickMovido = true; adminRedraw = true;
-      } else if (joyY >= 450 && joyY <= 650) {
-        joystickMovido = false;
-      }
+      } else if (joyY >= 450 && joyY <= 650) { joystickMovido = false; }
       
       if (adminRedraw) {
         lcd.clear();
@@ -359,33 +311,27 @@ void handleAdminMode() {
         }
         adminRedraw = false;
       }
-      
       if (joySelectClick) {
         if (adminCursor == 0) adminEstadoActual = ADMIN_TEMP;
         if (adminCursor == 1) adminEstadoActual = ADMIN_DIST;
         if (adminCursor == 2) adminEstadoActual = ADMIN_COUNT;
         if (adminCursor == 3) { adminEstadoActual = ADMIN_PRICE_LIST; precioCursor = 0; }
-        
-        adminRedraw = true; 
-        tRefrescoSensores = 0; 
+        adminRedraw = true; tRefrescoSensores = 0; 
       }
       break;
     }
 
     case ADMIN_TEMP:
       if (millis() - tRefrescoSensores > 500) {
-        float h = dht.readHumidity();
-        float t = dht.readTemperature();
-        mostrarDatosDHT(t, h);
-        tRefrescoSensores = millis();
+        float h = dht.readHumidity(); float t = dht.readTemperature();
+        mostrarDatosDHT(t, h); tRefrescoSensores = millis();
       }
       if (joyBackClick) { adminEstadoActual = ADMIN_MAIN; adminRedraw = true; }
       break;
 
     case ADMIN_DIST:
       if (millis() - tRefrescoSensores > 500) {
-        medirDistancia();
-        lcd.clear();
+        medirDistancia(); lcd.clear();
         lcd.setCursor(0,0); lcd.print("Distancia:");
         lcd.setCursor(0,1); lcd.print(distancia); lcd.print(" cm");
         tRefrescoSensores = millis();
@@ -395,11 +341,9 @@ void handleAdminMode() {
 
     case ADMIN_COUNT:
       if (adminRedraw || (millis() - tRefrescoSensores > 1000)) {
-        lcd.clear();
-        lcd.print("Tiempo ON:");
+        lcd.clear(); lcd.print("Tiempo ON:");
         lcd.setCursor(0,1); lcd.print(millis()/1000); lcd.print(" seg");
-        adminRedraw = false;
-        tRefrescoSensores = millis();
+        adminRedraw = false; tRefrescoSensores = millis();
       }
       if (joyBackClick) { adminEstadoActual = ADMIN_MAIN; adminRedraw = true; }
       break;
@@ -409,26 +353,15 @@ void handleAdminMode() {
         precioCursor++; joystickMovido = true; adminRedraw = true;
       } else if (joyY > 650 && precioCursor > 0 && !joystickMovido) {
         precioCursor--; joystickMovido = true; adminRedraw = true;
-      } else if (joyY >= 450 && joyY <= 650) {
-        joystickMovido = false;
-      }
+      } else if (joyY >= 450 && joyY <= 650) { joystickMovido = false; }
       
       if (adminRedraw) {
-        lcd.clear();
-        lcd.print(">"); lcd.print(nombres[precioCursor]);
+        lcd.clear(); lcd.print(">"); lcd.print(nombres[precioCursor]);
         lcd.setCursor(0, 1); lcd.print(precios[precioCursor], 2); lcd.print(" $");
         adminRedraw = false;
       }
-      
-      if (joySelectClick) {
-        adminEstadoActual = ADMIN_PRICE_EDIT;
-        adminRedraw = true;
-      }
-      if (joyBackClick) {
-        adminEstadoActual = ADMIN_MAIN;
-        adminCursor = 3; 
-        adminRedraw = true;
-      }
+      if (joySelectClick) { adminEstadoActual = ADMIN_PRICE_EDIT; adminRedraw = true; }
+      if (joyBackClick) { adminEstadoActual = ADMIN_MAIN; adminCursor = 3; adminRedraw = true; }
       break;
 
     case ADMIN_PRICE_EDIT:
@@ -436,45 +369,30 @@ void handleAdminMode() {
         precios[precioCursor] -= 0.05; joystickMovido = true; adminRedraw = true;
       } else if (joyY > 650 && !joystickMovido) {
         precios[precioCursor] += 0.05; joystickMovido = true; adminRedraw = true;
-      } else if (joyY >= 450 && joyY <= 650) {
-        joystickMovido = false;
-      }
+      } else if (joyY >= 450 && joyY <= 650) { joystickMovido = false; }
       
       if (adminRedraw) {
-        lcd.clear();
-        lcd.print(nombres[precioCursor]);
+        lcd.clear(); lcd.print(nombres[precioCursor]);
         lcd.setCursor(0, 1); lcd.print(precios[precioCursor], 2); lcd.print(" $ (Edit)");
         adminRedraw = false;
       }
+      if (joySelectClick || joyBackClick) { adminEstadoActual = ADMIN_PRICE_LIST; adminRedraw = true; }
+      break;
       
-      if (joySelectClick || joyBackClick) { 
-        adminEstadoActual = ADMIN_PRICE_LIST;
-        adminRedraw = true;
-      }
-      break;
-
-    default:
-      adminEstadoActual = ADMIN_MAIN;
-      break;
+    default: adminEstadoActual = ADMIN_MAIN; break;
   }
-
-  // Pequeño delay de estabilidad
   delay(10); 
 }
 
 // --- FUNCIONES AUXILIARES ---
-
 void entrarModoAdmin() {
   estadoActual = ADMIN;
   adminEstadoActual = ADMIN_INICIO; 
   adminCursor = 0;
   adminRedraw = true;
-  
   digitalWrite(PIN_LED_1, HIGH);
   analogWrite(PIN_LED_2, 255); 
-  
-  lcd.clear();
-  tInicio = millis(); 
+  lcd.clear(); tInicio = millis(); 
 }
 
 void salirModoAdmin() {
@@ -492,10 +410,8 @@ void reiniciarServicio() {
 }
 
 void medirDistancia() {
-  digitalWrite(PIN_ULTRA_TRIG, LOW);
-  delayMicroseconds(2);
-  digitalWrite(PIN_ULTRA_TRIG, HIGH);
-  delayMicroseconds(10);
+  digitalWrite(PIN_ULTRA_TRIG, LOW); delayMicroseconds(2);
+  digitalWrite(PIN_ULTRA_TRIG, HIGH); delayMicroseconds(10);
   digitalWrite(PIN_ULTRA_TRIG, LOW);
   duracion = pulseIn(PIN_ULTRA_ECHO, HIGH);
   distancia = duracion / 58;
@@ -503,9 +419,8 @@ void medirDistancia() {
 
 void mostrarDatosDHT(float t, float h) {
   lcd.clear();
-  if (isnan(h) || isnan(t)) {
-    lcd.print("Error Sensor");
-  } else {
+  if (isnan(h) || isnan(t)) { lcd.print("Error Sensor"); } 
+  else {
     lcd.setCursor(0, 0); lcd.print("Temp:"); lcd.print(t, 1); lcd.print("C");
     lcd.setCursor(0, 1); lcd.print("Hum:"); lcd.print(h, 1); lcd.print("%");
   }
