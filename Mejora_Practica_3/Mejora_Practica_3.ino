@@ -66,9 +66,9 @@ enum Estado {
   ENCONTRADO_DATOS, 
   MENU,
   PREPARANDO,
-  RETIRAR,          
-  REINICIANDO,      
-  ADMIN             
+  RETIRAR,           
+  REINICIANDO,       
+  ADMIN              
 };
 Estado estadoActual = INICIO; 
 
@@ -112,9 +112,9 @@ void setup() {
   // Pequeña secuencia de inicio
   for (int i = 0; i < 3; i++) {
     digitalWrite(PIN_LED_1, HIGH); 
-    delay(200);                    
+    delay(200);                     
     digitalWrite(PIN_LED_1, LOW);  
-    delay(200);                    
+    delay(200);                     
   }
   
   // Primer estado INICIO
@@ -133,11 +133,12 @@ void loop() {
 }
 
 // ---------------------------------------------------------
-// MODO SERVICIO (Lógica original con pequeñas limpiezas)
+// MODO SERVICIO (USANDO SWITCH)
 // ---------------------------------------------------------
 void handleServicioMode() {
 
   // Lógica de Botón Global (Pulsación Larga -> Admin)
+  // Se mantiene fuera del switch porque aplica a casi cualquier momento
   if (digitalRead(PIN_BOTON) == LOW) {
     if (tBotonPress == 0) tBotonPress = millis();
     
@@ -158,292 +159,306 @@ void handleServicioMode() {
     }
   }
 
-  // Lógica de Estados Servicio
-  if (estadoActual == INICIO) {
-    lcd.setCursor(4, 0);
-    lcd.print("Servicio");
-    if (millis() - tInicio > 1000) reiniciarServicio(); 
+  // --- MÁQUINA DE ESTADOS PRINCIPAL ---
+  switch (estadoActual) {
 
-  } else if (estadoActual == ESPERANDO) {
-    if (millis() - tInicio > 200) {
-      medirDistancia();
+    case INICIO:
+      lcd.setCursor(4, 0);
+      lcd.print("Servicio");
+      if (millis() - tInicio > 1000) reiniciarServicio(); 
+      break;
+
+    case ESPERANDO:
+      if (millis() - tInicio > 200) {
+        medirDistancia();
+        
+        // Dibujar solo lo necesario
+        lcd.setCursor(0, 0); lcd.print("ESPERANDO");
+        lcd.setCursor(0, 1); lcd.print("CLIENTE...    "); 
+        
+        tInicio = millis(); 
+        if (distancia < 100) {
+          estadoActual = ENCONTRADO_MSG; 
+          lcd.clear();
+          tInicio = millis(); 
+        }
+      }
+      break;
+
+    case ENCONTRADO_MSG:
+      lcd.setCursor(4, 0); lcd.print("CLIENTE");
+      lcd.setCursor(3, 1); lcd.print("ENCONTRADO");
       
-      // Dibujar solo lo necesario para evitar parpadeo masivo
-      // (Aquí simplificado, idealmente usar flag de cambio)
-      lcd.setCursor(0, 0); lcd.print("ESPERANDO");
-      lcd.setCursor(0, 1); lcd.print("CLIENTE...    "); // Espacios para limpiar
-      
-      tInicio = millis(); 
-      if (distancia < 100) {
-        estadoActual = ENCONTRADO_MSG; 
+      if (millis() - tInicio > 2000) {
+        estadoActual = ENCONTRADO_DATOS;
         lcd.clear();
+        tempPrev = -999; // Forzar actualización LCD
         tInicio = millis(); 
       }
-    }
-    
-  } else if (estadoActual == ENCONTRADO_MSG) {
-    lcd.setCursor(4, 0); lcd.print("CLIENTE");
-    lcd.setCursor(3, 1); lcd.print("ENCONTRADO");
-    
-    if (millis() - tInicio > 2000) {
-      estadoActual = ENCONTRADO_DATOS;
-      lcd.clear();
-      tempPrev = -999; // Forzar actualización LCD
-      tInicio = millis(); 
-    }
+      break;
 
-  } else if (estadoActual == ENCONTRADO_DATOS) {
-    float h = dht.readHumidity();
-    float t = dht.readTemperature();
-    
-    // Actualizar solo si cambia
-    if (abs(t - tempPrev) > 0.5 || abs(h - humPrev) > 1.0) {
-        mostrarDatosDHT(t, h);
-        tempPrev = t;
-        humPrev = h;
-    }
-
-    if (millis() - tInicio > 5000) {
-      distancia = 1000;
-      estadoActual = MENU;
-      lcd.clear();
-      tInicio = millis();
-    }
-
-  } else if (estadoActual == MENU) {
-    int joyY = analogRead(PIN_JOY_Y);
-    
-    if(joyY < 450 && count < 4 && !joystickMovido){
-      count++; 
-      joystickMovido = true;
-      lcd.clear(); // Limpiar al cambiar
-    } else if(joyY > 650 && count > 0 && !joystickMovido){
-      count--; 
-      joystickMovido = true;
-      lcd.clear();
-    } else if (joyY >= 450 && joyY <= 650) {
-      joystickMovido = false;
-    }
-
-    lcd.setCursor(0, 0); lcd.print(nombres[count]);
-    lcd.setCursor(0, 1); lcd.print(precios[count], 2); lcd.print(" $");
-    
-    if (digitalRead(PIN_JOY_SW) == LOW) {
-      delay(50); // Debounce simple en modo servicio
-      while(digitalRead(PIN_JOY_SW) == LOW); 
+    case ENCONTRADO_DATOS: {
+      // Usamos llaves {} para definir variables locales dentro del case
+      float h = dht.readHumidity();
+      float t = dht.readTemperature();
       
-      estadoActual = PREPARANDO;
-      lcd.clear();
-      brilloLed = 0; 
-      long tiempoTotal = random(4000, 8001); 
-      intervaloLed = tiempoTotal / 255;      
-      tInicio = millis(); 
-    }
-    
-  } else if (estadoActual == PREPARANDO) {
-    lcd.setCursor(0, 0); lcd.print("Preparando Cafe...");
-    
-    if (millis() - tInicio >= intervaloLed) {
-      if (brilloLed <= 255) {
-        analogWrite(PIN_LED_2, brilloLed);
-        brilloLed++;
-        tInicio = millis(); 
-      } else {
-        analogWrite(PIN_LED_2, 0);
-        estadoActual = RETIRAR;
+      // Actualizar solo si cambia
+      if (abs(t - tempPrev) > 0.5 || abs(h - humPrev) > 1.0) {
+         mostrarDatosDHT(t, h);
+         tempPrev = t;
+         humPrev = h;
+      }
+
+      if (millis() - tInicio > 5000) {
+        distancia = 1000;
+        estadoActual = MENU;
         lcd.clear();
+        tInicio = millis();
+      }
+      break;
+    }
+
+    case MENU: {
+      int joyY = analogRead(PIN_JOY_Y);
+      
+      if(joyY < 450 && count < 4 && !joystickMovido){
+        count++; 
+        joystickMovido = true;
+        lcd.clear(); 
+      } else if(joyY > 650 && count > 0 && !joystickMovido){
+        count--; 
+        joystickMovido = true;
+        lcd.clear();
+      } else if (joyY >= 450 && joyY <= 650) {
+        joystickMovido = false;
+      }
+
+      lcd.setCursor(0, 0); lcd.print(nombres[count]);
+      lcd.setCursor(0, 1); lcd.print(precios[count], 2); lcd.print(" $");
+      
+      if (digitalRead(PIN_JOY_SW) == LOW) {
+        delay(50); 
+        while(digitalRead(PIN_JOY_SW) == LOW); 
+        
+        estadoActual = PREPARANDO;
+        lcd.clear();
+        brilloLed = 0; 
+        long tiempoTotal = random(4000, 8001); 
+        intervaloLed = tiempoTotal / 255;       
         tInicio = millis(); 
       }
+      break;
     }
-    
-  } else if (estadoActual == RETIRAR) {
-    lcd.setCursor(0, 0); lcd.print("RETIRE BEBIDA");
-    if (millis() - tInicio > 3000) reiniciarServicio();
-    
-  } else if (estadoActual == REINICIANDO) {
-    lcd.setCursor(0, 0); lcd.print("REINICIANDO...");
-    if (millis() - tInicio > 1500) reiniciarServicio();
+
+    case PREPARANDO:
+      lcd.setCursor(0, 0); lcd.print("Preparando Cafe...");
+      
+      if (millis() - tInicio >= intervaloLed) {
+        if (brilloLed <= 255) {
+          analogWrite(PIN_LED_2, brilloLed);
+          brilloLed++;
+          tInicio = millis(); 
+        } else {
+          analogWrite(PIN_LED_2, 0);
+          estadoActual = RETIRAR;
+          lcd.clear();
+          tInicio = millis(); 
+        }
+      }
+      break;
+
+    case RETIRAR:
+      lcd.setCursor(0, 0); lcd.print("RETIRE BEBIDA");
+      if (millis() - tInicio > 3000) reiniciarServicio();
+      break;
+
+    case REINICIANDO:
+      lcd.setCursor(0, 0); lcd.print("REINICIANDO...");
+      if (millis() - tInicio > 1500) reiniciarServicio();
+      break;
+      
+    default:
+      // Estado seguro por si acaso
+      estadoActual = INICIO;
+      break;
   }
 }
 
 // ---------------------------------------------------------
-// MODO ADMIN (OPTIMIZADO SIN DELAYS)
+// MODO ADMIN (USANDO SWITCH)
 // ---------------------------------------------------------
 void handleAdminMode() {
 
   // --- 1. LECTURA DE CONTROLES NO BLOQUEANTE ---
+  // Se mantiene fuera del switch para que funcione en cualquier menú
   
-  // Salida rápida Admin (Mantener botón pulsado)
   if (digitalRead(PIN_BOTON) == LOW) {
-     long t = 0;
-     while(digitalRead(PIN_BOTON) == LOW) {
-       delay(10);
-       t += 10;
-       if (t >= 3000) { // Reducido a 3s para mejor UX
+      long t = 0;
+      while(digitalRead(PIN_BOTON) == LOW) {
+        delay(10);
+        t += 10;
+        if (t >= 3000) { 
           salirModoAdmin(); 
           return;
-       }
-     }
+        }
+      }
   }
 
-  // Lectura Joystick
   int joyY = analogRead(PIN_JOY_Y);
   bool currentJoySelect = (digitalRead(PIN_JOY_SW) == LOW);
-  bool currentJoyBack = (analogRead(PIN_JOY_X) < 450); // Mover Joystick a la izquierda para volver
+  bool currentJoyBack = (analogRead(PIN_JOY_X) < 450); 
 
-  // Detección de Flanco (Click)
   bool joySelectClick = (currentJoySelect && !prevJoySelect);
   bool joyBackClick = (currentJoyBack && !prevJoyBack);
 
-  // Guardar estado para la siguiente vuelta
   prevJoySelect = currentJoySelect;
   prevJoyBack = currentJoyBack;
 
   // --- 2. MÁQUINA DE ESTADOS ADMIN ---
 
-  // -> TRANSICIONES INICIALES/FINALES
-  if (adminEstadoActual == ADMIN_INICIO) {
-    if (adminRedraw) { lcd.clear(); lcd.setCursor(0,0); lcd.print("MODO ADMIN"); adminRedraw = false; }
-    if (millis() - tInicio > 1000) {
-      adminEstadoActual = ADMIN_MAIN;
-      adminRedraw = true;
-    }
-    return;
-  }
-  
-  if (adminEstadoActual == ADMIN_SALIDA) {
-    if (adminRedraw) {
-       lcd.clear(); lcd.setCursor(0,0); lcd.print("SALIENDO...");
-       digitalWrite(PIN_LED_1, LOW); analogWrite(PIN_LED_2, 0);
-       adminRedraw = false;
-    }
-    if (millis() - tInicio > 1000) reiniciarServicio(); 
-    return;
-  }
+  switch (adminEstadoActual) {
 
-  // -> MENU PRINCIPAL
-  if (adminEstadoActual == ADMIN_MAIN) {
-    String menu[4] = {"Ver temp", "Ver distancia", "Ver contador", "Modificar $"};
-    
-    // Navegación Vertical
-    if (joyY < 450 && adminCursor < 3 && !joystickMovido) {
-      adminCursor++; joystickMovido = true; adminRedraw = true;
-    } else if (joyY > 650 && adminCursor > 0 && !joystickMovido) {
-      adminCursor--; joystickMovido = true; adminRedraw = true;
-    } else if (joyY >= 450 && joyY <= 650) {
-      joystickMovido = false;
-    }
-    
-    // Dibujado (Solo si es necesario)
-    if (adminRedraw) {
-      lcd.clear();
-      lcd.setCursor(0, 0); lcd.print("> "); lcd.print(menu[adminCursor]);
-      if (adminCursor < 3) {
-        lcd.setCursor(1, 1); lcd.print(menu[adminCursor + 1]);
-      } else {
-        // Estética: si estamos en el último, mostramos el anterior arriba
-        lcd.setCursor(1, 1); lcd.print("                "); // borrar linea
-        lcd.setCursor(0, 0); lcd.print(menu[adminCursor-1]);
-        lcd.setCursor(0, 1); lcd.print("> "); lcd.print(menu[adminCursor]);
+    case ADMIN_INICIO:
+      if (adminRedraw) { lcd.clear(); lcd.setCursor(0,0); lcd.print("MODO ADMIN"); adminRedraw = false; }
+      if (millis() - tInicio > 1000) {
+        adminEstadoActual = ADMIN_MAIN;
+        adminRedraw = true;
       }
-      adminRedraw = false;
-    }
-    
-    // Selección (Click)
-    if (joySelectClick) {
-      if (adminCursor == 0) adminEstadoActual = ADMIN_TEMP;
-      if (adminCursor == 1) adminEstadoActual = ADMIN_DIST;
-      if (adminCursor == 2) adminEstadoActual = ADMIN_COUNT;
-      if (adminCursor == 3) { adminEstadoActual = ADMIN_PRICE_LIST; precioCursor = 0; }
+      break;
+
+    case ADMIN_SALIDA:
+      if (adminRedraw) {
+         lcd.clear(); lcd.setCursor(0,0); lcd.print("SALIENDO...");
+         digitalWrite(PIN_LED_1, LOW); analogWrite(PIN_LED_2, 0);
+         adminRedraw = false;
+      }
+      if (millis() - tInicio > 1000) reiniciarServicio(); 
+      break;
+
+    case ADMIN_MAIN: {
+      // Necesario llaves {} porque declaramos variable local 'menu'
+      String menu[4] = {"Ver temp", "Ver distancia", "Ver contador", "Modificar $"};
       
-      adminRedraw = true; // Forzar pintado del nuevo estado
-      tRefrescoSensores = 0; // Resetear timer de sensores
+      if (joyY < 450 && adminCursor < 3 && !joystickMovido) {
+        adminCursor++; joystickMovido = true; adminRedraw = true;
+      } else if (joyY > 650 && adminCursor > 0 && !joystickMovido) {
+        adminCursor--; joystickMovido = true; adminRedraw = true;
+      } else if (joyY >= 450 && joyY <= 650) {
+        joystickMovido = false;
+      }
+      
+      if (adminRedraw) {
+        lcd.clear();
+        lcd.setCursor(0, 0); lcd.print("> "); lcd.print(menu[adminCursor]);
+        if (adminCursor < 3) {
+          lcd.setCursor(1, 1); lcd.print(menu[adminCursor + 1]);
+        } else {
+          lcd.setCursor(1, 1); lcd.print("                "); 
+          lcd.setCursor(0, 0); lcd.print(menu[adminCursor-1]);
+          lcd.setCursor(0, 1); lcd.print("> "); lcd.print(menu[adminCursor]);
+        }
+        adminRedraw = false;
+      }
+      
+      if (joySelectClick) {
+        if (adminCursor == 0) adminEstadoActual = ADMIN_TEMP;
+        if (adminCursor == 1) adminEstadoActual = ADMIN_DIST;
+        if (adminCursor == 2) adminEstadoActual = ADMIN_COUNT;
+        if (adminCursor == 3) { adminEstadoActual = ADMIN_PRICE_LIST; precioCursor = 0; }
+        
+        adminRedraw = true; 
+        tRefrescoSensores = 0; 
+      }
+      break;
     }
-    
-  // -> VER TEMPERATURA
-  } else if (adminEstadoActual == ADMIN_TEMP) {
-    // Actualizar cada 500ms para no parpadear
-    if (millis() - tRefrescoSensores > 500) {
-      float h = dht.readHumidity();
-      float t = dht.readTemperature();
-      mostrarDatosDHT(t, h);
-      tRefrescoSensores = millis();
-    }
-    if (joyBackClick) { adminEstadoActual = ADMIN_MAIN; adminRedraw = true; }
 
-  // -> VER DISTANCIA
-  } else if (adminEstadoActual == ADMIN_DIST) {
-    if (millis() - tRefrescoSensores > 500) {
-      medirDistancia();
-      lcd.clear();
-      lcd.setCursor(0,0); lcd.print("Distancia:");
-      lcd.setCursor(0,1); lcd.print(distancia); lcd.print(" cm");
-      tRefrescoSensores = millis();
-    }
-    if (joyBackClick) { adminEstadoActual = ADMIN_MAIN; adminRedraw = true; }
+    case ADMIN_TEMP:
+      if (millis() - tRefrescoSensores > 500) {
+        float h = dht.readHumidity();
+        float t = dht.readTemperature();
+        mostrarDatosDHT(t, h);
+        tRefrescoSensores = millis();
+      }
+      if (joyBackClick) { adminEstadoActual = ADMIN_MAIN; adminRedraw = true; }
+      break;
 
-  // -> VER CONTADOR
-  } else if (adminEstadoActual == ADMIN_COUNT) {
-    if (adminRedraw || (millis() - tRefrescoSensores > 1000)) {
-      lcd.clear();
-      lcd.print("Tiempo ON:");
-      lcd.setCursor(0,1); lcd.print(millis()/1000); lcd.print(" seg");
-      adminRedraw = false;
-      tRefrescoSensores = millis();
-    }
-    if (joyBackClick) { adminEstadoActual = ADMIN_MAIN; adminRedraw = true; }
+    case ADMIN_DIST:
+      if (millis() - tRefrescoSensores > 500) {
+        medirDistancia();
+        lcd.clear();
+        lcd.setCursor(0,0); lcd.print("Distancia:");
+        lcd.setCursor(0,1); lcd.print(distancia); lcd.print(" cm");
+        tRefrescoSensores = millis();
+      }
+      if (joyBackClick) { adminEstadoActual = ADMIN_MAIN; adminRedraw = true; }
+      break;
 
-  // -> LISTA DE PRECIOS
-  } else if (adminEstadoActual == ADMIN_PRICE_LIST) {
-    if (joyY < 450 && precioCursor < 4 && !joystickMovido) {
-      precioCursor++; joystickMovido = true; adminRedraw = true;
-    } else if (joyY > 650 && precioCursor > 0 && !joystickMovido) {
-      precioCursor--; joystickMovido = true; adminRedraw = true;
-    } else if (joyY >= 450 && joyY <= 650) {
-      joystickMovido = false;
-    }
-    
-    if (adminRedraw) {
-      lcd.clear();
-      lcd.print(">"); lcd.print(nombres[precioCursor]);
-      lcd.setCursor(0, 1); lcd.print(precios[precioCursor], 2); lcd.print(" $");
-      adminRedraw = false;
-    }
-    
-    if (joySelectClick) {
-      adminEstadoActual = ADMIN_PRICE_EDIT;
-      adminRedraw = true;
-    }
-    if (joyBackClick) {
+    case ADMIN_COUNT:
+      if (adminRedraw || (millis() - tRefrescoSensores > 1000)) {
+        lcd.clear();
+        lcd.print("Tiempo ON:");
+        lcd.setCursor(0,1); lcd.print(millis()/1000); lcd.print(" seg");
+        adminRedraw = false;
+        tRefrescoSensores = millis();
+      }
+      if (joyBackClick) { adminEstadoActual = ADMIN_MAIN; adminRedraw = true; }
+      break;
+
+    case ADMIN_PRICE_LIST:
+      if (joyY < 450 && precioCursor < 4 && !joystickMovido) {
+        precioCursor++; joystickMovido = true; adminRedraw = true;
+      } else if (joyY > 650 && precioCursor > 0 && !joystickMovido) {
+        precioCursor--; joystickMovido = true; adminRedraw = true;
+      } else if (joyY >= 450 && joyY <= 650) {
+        joystickMovido = false;
+      }
+      
+      if (adminRedraw) {
+        lcd.clear();
+        lcd.print(">"); lcd.print(nombres[precioCursor]);
+        lcd.setCursor(0, 1); lcd.print(precios[precioCursor], 2); lcd.print(" $");
+        adminRedraw = false;
+      }
+      
+      if (joySelectClick) {
+        adminEstadoActual = ADMIN_PRICE_EDIT;
+        adminRedraw = true;
+      }
+      if (joyBackClick) {
+        adminEstadoActual = ADMIN_MAIN;
+        adminCursor = 3; 
+        adminRedraw = true;
+      }
+      break;
+
+    case ADMIN_PRICE_EDIT:
+      if (joyY < 450 && !joystickMovido) {
+        precios[precioCursor] -= 0.05; joystickMovido = true; adminRedraw = true;
+      } else if (joyY > 650 && !joystickMovido) {
+        precios[precioCursor] += 0.05; joystickMovido = true; adminRedraw = true;
+      } else if (joyY >= 450 && joyY <= 650) {
+        joystickMovido = false;
+      }
+      
+      if (adminRedraw) {
+        lcd.clear();
+        lcd.print(nombres[precioCursor]);
+        lcd.setCursor(0, 1); lcd.print(precios[precioCursor], 2); lcd.print(" $ (Edit)");
+        adminRedraw = false;
+      }
+      
+      if (joySelectClick || joyBackClick) { 
+        adminEstadoActual = ADMIN_PRICE_LIST;
+        adminRedraw = true;
+      }
+      break;
+
+    default:
       adminEstadoActual = ADMIN_MAIN;
-      adminCursor = 3; 
-      adminRedraw = true;
-    }
-    
-  // -> EDITAR PRECIO
-  } else if (adminEstadoActual == ADMIN_PRICE_EDIT) {
-    if (joyY < 450 && !joystickMovido) {
-      precios[precioCursor] -= 0.05; joystickMovido = true; adminRedraw = true;
-    } else if (joyY > 650 && !joystickMovido) {
-      precios[precioCursor] += 0.05; joystickMovido = true; adminRedraw = true;
-    } else if (joyY >= 450 && joyY <= 650) {
-      joystickMovido = false;
-    }
-    
-    if (adminRedraw) {
-      lcd.clear();
-      lcd.print(nombres[precioCursor]);
-      lcd.setCursor(0, 1); lcd.print(precios[precioCursor], 2); lcd.print(" $ (Edit)");
-      adminRedraw = false;
-    }
-    
-    if (joySelectClick || joyBackClick) { // Guardar y salir con clic o atrás
-      adminEstadoActual = ADMIN_PRICE_LIST;
-      adminRedraw = true;
-    }
+      break;
   }
 
-  // Pequeño delay de estabilidad (ya no bloquea 200ms)
+  // Pequeño delay de estabilidad
   delay(10); 
 }
 
